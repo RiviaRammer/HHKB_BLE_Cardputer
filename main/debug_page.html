@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HHKB_BLE</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { max-width: 820px; margin: auto; padding: 22px; background: #0d1117; color: #e6edf3; }
+    h1 { margin: 0 0 5px; font-size: 1.8rem; }
+    .hint, .meta { color: #8b949e; }
+    .hint { margin: 0 0 18px; }
+    .status { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .pill { padding: 7px 11px; border: 1px solid #3d444d; border-radius: 99px; color: #f85149; background: #161b22; }
+    .pill.ok { color: #3fb950; border-color: #238636; }
+    .card { margin-top: 14px; padding: 18px; border: 1px solid #30363d; border-radius: 12px; background: #161b22; }
+    .card h2 { margin: 0 0 12px; font-size: 1.05rem; }
+    .keys { min-height: 1.5em; color: #79c0ff; font: 700 1.8rem ui-monospace, monospace; }
+    .metric { color: #d2a8ff; font: 700 1.2rem ui-monospace, monospace; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 18px 0 8px; }
+    button { padding: 8px 12px; border: 1px solid #3d444d; border-radius: 8px; color: #e6edf3; background: #21262d; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; font: .88rem ui-monospace, monospace; }
+    th, td { padding: 8px; border-bottom: 1px solid #30363d; text-align: left; }
+    th { color: #8b949e; }
+    .empty { color: #8b949e; text-align: center; padding: 24px; }
+    .error { color: #f85149; }
+    @media (max-width: 600px) { body { padding: 14px; } .raw { display: none; } }
+  </style>
+</head>
+<body>
+  <h1>HHKB_BLE</h1>
+  <p class="hint">HHKB Professional 2 → Cardputer → 蓝牙键盘</p>
+
+  <div class="status">
+    <span id="keyboard" class="pill">等待 HHKB</span>
+    <span id="ble" class="pill">HHKB_BLE 等待配对</span>
+    <span id="network" class="pill ok">Wi-Fi · IP 获取中</span>
+  </div>
+
+  <section class="card">
+    <h2>当前按键</h2>
+    <div id="keys" class="keys">全部松开</div>
+    <p class="meta">累计输入报告：<span id="count" class="metric">0</span></p>
+    <div id="device" class="meta">正在等待 USB 键盘……</div>
+    <div id="age" class="meta">尚未收到按键数据</div>
+    <div id="error" class="error"></div>
+  </section>
+
+  <div class="toolbar">
+    <strong>最近输入</strong>
+    <button id="clear">清空列表</button>
+  </div>
+  <section class="card">
+    <table>
+      <thead><tr><th>时间</th><th>按键</th><th class="raw">原始报告</th></tr></thead>
+      <tbody id="events"><tr><td colspan="3" class="empty">等待 HHKB 输入……</td></tr></tbody>
+    </table>
+  </section>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const names = {
+      4:'A',5:'B',6:'C',7:'D',8:'E',9:'F',10:'G',11:'H',12:'I',13:'J',14:'K',15:'L',16:'M',17:'N',18:'O',19:'P',20:'Q',21:'R',22:'S',23:'T',24:'U',25:'V',26:'W',27:'X',28:'Y',29:'Z',
+      30:'1',31:'2',32:'3',33:'4',34:'5',35:'6',36:'7',37:'8',38:'9',39:'0',40:'Enter',41:'Esc',42:'Backspace',43:'Tab',44:'Space',45:'-',46:'=',47:'[',48:']',49:'\\',51:';',52:"'",53:'`',54:',',55:'.',56:'/',57:'CapsLock',58:'F1',59:'F2',60:'F3',61:'F4',62:'F5',63:'F6',64:'F7',65:'F8',66:'F9',67:'F10',68:'F11',69:'F12',70:'PrintScreen',71:'ScrollLock',72:'Pause',73:'Insert',74:'Home',75:'PageUp',76:'Delete',77:'End',78:'PageDown',79:'Right',80:'Left',81:'Down',82:'Up'
+    };
+    const modifiers = ['L-Ctrl','L-Shift','L-Alt','L-GUI','R-Ctrl','R-Shift','R-Alt','R-GUI'];
+    let after = 0, rows = [];
+
+    function hex(value) { return value.toString(16).toUpperCase().padStart(2, '0'); }
+    function vidpid(value) { return value.toString(16).toUpperCase().padStart(4, '0'); }
+    function decode(data) {
+      const result = [];
+      modifiers.forEach((name, bit) => { if (data[0] & (1 << bit)) result.push(name); });
+      data.slice(2).filter(code => code).forEach(code => result.push(names[code] || `Usage-0x${hex(code)}`));
+      return result.length ? result.join(' + ') : '全部松开';
+    }
+    function setPill(id, active, label) {
+      $(id).textContent = label;
+      $(id).className = 'pill' + (active ? ' ok' : '');
+    }
+    function renderRows() {
+      if (!rows.length) {
+        $('events').innerHTML = '<tr><td colspan="3" class="empty">等待 HHKB 输入……</td></tr>';
+        return;
+      }
+      $('events').innerHTML = rows.slice().reverse().map(event =>
+        `<tr><td>${(event.ms / 1000).toFixed(3)}s</td><td>${decode(event.data)}</td><td class="raw">${event.data.map(hex).join(' ')}</td></tr>`
+      ).join('');
+    }
+    async function refresh() {
+      try {
+        const response = await fetch('/api/status?after=' + after, {cache:'no-store'});
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const status = await response.json();
+        setPill('keyboard', status.keyboard_online, status.keyboard_online ? 'HHKB 已连接' : '等待 HHKB（检查外部供电）');
+        const bleText = status.ble_ready ? 'HHKB_BLE 已配对' : status.ble_connected ? 'HHKB_BLE 配对中' : 'HHKB_BLE 等待配对';
+        setPill('ble', status.ble_ready, bleText);
+        setPill('network', true, `Wi-Fi · ${status.ip}`);
+        $('keys').textContent = decode(status.latest);
+        $('count').textContent = status.report_count;
+        $('device').textContent = status.keyboard_online ? `USB 键盘 ${vidpid(status.vid)}:${vidpid(status.pid)}` : '正在等待 USB 键盘……';
+        $('age').textContent = status.report_count ? `最后输入：启动后 ${(status.latest_ms / 1000).toFixed(3)} 秒` : '尚未收到按键数据';
+        $('error').textContent = status.error ? `USB 错误：${status.error_stage} (${status.error})` : '';
+        if (status.events.length) {
+          after = status.events[status.events.length - 1].seq;
+          rows.push(...status.events);
+          if (rows.length > 40) rows = rows.slice(-40);
+          renderRows();
+        }
+      } catch (error) {
+        setPill('network', false, 'Web 状态读取失败');
+        $('error').textContent = error.message;
+      }
+    }
+    $('clear').onclick = () => { rows = []; renderRows(); };
+    refresh();
+    setInterval(refresh, 400);
+  </script>
+</body>
+</html>

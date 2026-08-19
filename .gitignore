@@ -1,0 +1,9 @@
+build/
+sdkconfig
+sdkconfig.old
+main/config.h
+.vscode/
+compile_commands.json
+components/
+dependencies.lock
+managed_components/
